@@ -1,6 +1,6 @@
 # miniproui
 
-A desktop app for XGecu TL866A/CS, TL866II+, T48, T56, and T76 programmers. It talks to the programmer over USB through [minipro-core](https://gitlab.com/arcturus8081/minipro-rs) and does not shell out to the C `minipro` binary.
+A desktop app for XGecu TL866A/CS, TL866II+, T48, T56, and T76 programmers. It talks to the programmer over USB through [minipro-core](https://github.com/MikeDX/minipro-rs) and does not shell out to the C `minipro` binary.
 
 The first version can detect the programmer, search the chip database, read, write, verify, erase, blank-check, and read a chip ID. Reads and opened files show up in a hex view, with a live log of each operation.
 
