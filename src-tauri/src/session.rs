@@ -695,7 +695,7 @@ impl AppState {
         Ok(crate::roms::analyze(&self.buffer_bytes()?))
     }
 
-    pub fn rom_ident(&self) -> Result<crate::roms::RomI dentReport, String> {
+    pub fn rom_ident(&self) -> Result<crate::roms::RomIdentReport, String> {
         let bytes = self.buffer_bytes()?;
         let path = {
             let session = lock(&self.session);

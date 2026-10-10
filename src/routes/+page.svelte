@@ -8,20 +8,28 @@
   import {
     blankCheck,
     bufferReport,
+    compareBrowserFile,
     compareBuffer,
     deviceInfo,
+    encodeBrowser,
     eraseChip,
     errorText,
     hardwareTest,
+    loadBrowserFile,
     loadFile,
     logicTest,
+    onBrowserLog,
+    onBrowserProgress,
     patchBuffer,
+    pickBrowserFile,
     pinCheck,
+    prepareBrowser,
     programmerStatus,
     readConfig,
     readId,
     romIdent,
     readMemory,
+    saveBrowser,
     saveBuffer,
     searchDevices,
     setOptions,
@@ -37,6 +45,7 @@
     type SearchHit,
   } from "$lib/api";
 
+  const browser = !isTauri();
   const profiles = ["TL866II+", "TL866A"];
 
   let profile = $state("TL866II+");
@@ -55,6 +64,8 @@
   let info = $state<DeviceInfo | null>(null);
   let page = $state(0);
   let filePath = $state<string | null>(null);
+  let localFile = $state<File | null>(null);
+  let fileToken = $state(0);
   let fileReport = $state<FileReport | null>(null);
   let bufferLength = $state(0);
   let bufferCrc = $state<string | null>(null);
@@ -156,7 +167,6 @@
   });
 
   $effect(() => {
-    if (!isTauri()) return;
     const skip = skipId;
     const socket = icsp;
     setOptions(skip, socket).catch((err) => note(errorText(err)));
@@ -164,15 +174,24 @@
 
   $effect(() => {
     const path = filePath;
+    const file = localFile;
+    const token = fileToken;
     const name = selected ?? "";
     const model = activeModel;
     const memoryPage = page;
+    void token;
     if (!path) {
       fileReport = null;
       return;
     }
     let cancelled = false;
-    loadFile(path, name, memoryPage, model)
+    const pending = browser
+      ? file
+        ? loadBrowserFile(name, file, memoryPage, model)
+        : null
+      : loadFile(path, name, memoryPage, model);
+    if (!pending) return;
+    pending
       .then((report) => {
         if (cancelled) return;
         fileReport = report;
@@ -197,7 +216,21 @@
   });
 
   onMount(() => {
-    if (!isTauri()) return;
+    if (browser) {
+      statusMessage = navigator.usb
+        ? "Click Rescan to connect a programmer."
+        : "This browser has no WebUSB. Open this page in Chrome or Edge.";
+      const offLog = onBrowserLog((message) => note(message));
+      const offProgress = onBrowserProgress((doneBytes, totalBytes) => {
+        done = doneBytes;
+        total = totalBytes;
+      });
+      prepareBrowser().catch((err) => note(errorText(err)));
+      return () => {
+        offLog();
+        offProgress();
+      };
+    }
     const unsubs: Array<() => void> = [];
     let cancelled = false;
     void (async () => {
@@ -245,6 +278,14 @@
   }
 
   async function chooseFile() {
+    if (browser) {
+      const file = await pickBrowserFile();
+      if (!file) return;
+      localFile = file;
+      filePath = file.name;
+      fileToken += 1;
+      return;
+    }
     const selectedPath = await open({
       multiple: false,
       directory: false,
@@ -259,6 +300,15 @@
   }
 
   async function saveRead() {
+    if (browser) {
+      try {
+        const name = await saveBrowser((filename) => encodeBrowser(filename));
+        if (name) note(`Saved ${name}.`);
+      } catch (err) {
+        note(errorText(err));
+      }
+      return;
+    }
     const path = await save({
       filters: [
         { name: "Binary", extensions: ["bin"] },
@@ -327,6 +377,14 @@
   }
 
   async function doCompare() {
+    if (browser) {
+      const file = await pickBrowserFile();
+      if (!file) return;
+      await run(async () => {
+        noteLines((await compareBrowserFile(file)).lines);
+      });
+      return;
+    }
     const path = await open({
       multiple: false,
       directory: false,
@@ -467,6 +525,12 @@
   }
 
   async function askFirmware() {
+    if (browser) {
+      note(
+        "Firmware update resets the USB device, and WebUSB cannot claim it again afterwards. Use the desktop app for firmware updates.",
+      );
+      return;
+    }
     if (working) return;
     const path = await open({
       multiple: false,
@@ -495,6 +559,7 @@
 <div class="app">
   <header class="top">
     <h1>miniproui</h1>
+    {#if browser}<span class="muted">WebUSB</span>{/if}
     <div class="status">
       {#if connected}
         <span class="ok">Connected</span>

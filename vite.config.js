@@ -1,17 +1,79 @@
+// @ts-nocheck — this config uses Node builtins without @types/node.
 import { defineConfig } from "vite";
 import { sveltekit } from "@sveltejs/kit/vite";
-// @ts-expect-error type error without @types/node package
+import fs from "node:fs";
+import path from "node:path";
 import process from "node:process";
 
 const host = process.env.TAURI_DEV_HOST;
+const webusb = process.env.MINIPRO_WEBUSB === "1";
+const databaseDir = path.resolve("third_party/minipro-rs/data");
+const isolation = {
+  "Cross-Origin-Opener-Policy": "same-origin",
+  "Cross-Origin-Embedder-Policy": "require-corp",
+};
+
+function serveDatabase(req, res, next) {
+  const name = String(req.url || "")
+    .split("?")[0]
+    .replace(/^\//, "");
+  if (!["infoic.xml", "logicic.xml", "algorithm.xml"].includes(name)) {
+    next();
+    return;
+  }
+  const file = path.join(databaseDir, name);
+  if (!fs.existsSync(file)) {
+    next();
+    return;
+  }
+  res.setHeader("Content-Type", "application/xml");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  fs.createReadStream(file).pipe(res);
+}
+
+function isolationHeaders(_req, res, next) {
+  if (!webusb) {
+    next();
+    return;
+  }
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
+  res.setHeader("Cross-Origin-Embedder-Policy", "require-corp");
+  next();
+}
+
+function miniproDatabase() {
+  return {
+    name: "minipro-database",
+    enforce: "pre",
+    configureServer(server) {
+      server.middlewares.use(isolationHeaders);
+      server.middlewares.use("/db", serveDatabase);
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use(isolationHeaders);
+      server.middlewares.use("/db", serveDatabase);
+    },
+  };
+}
 
 export default defineConfig(() => ({
-  plugins: [sveltekit()],
+  plugins: [sveltekit(), miniproDatabase()],
+  resolve: {
+    alias: webusb
+      ? []
+      : [
+          {
+            find: /webusb\/client(?:\.ts)?$/,
+            replacement: path.resolve("src/lib/webusb/stub.ts"),
+          },
+        ],
+  },
   clearScreen: false,
   server: {
     port: 1420,
     strictPort: true,
     host: host || "127.0.0.1",
+    headers: webusb ? isolation : undefined,
     hmr: host
       ? {
           protocol: "ws",
@@ -20,7 +82,13 @@ export default defineConfig(() => ({
         }
       : undefined,
     watch: {
-      ignored: ["**/src-tauri/**", "**/third_party/**"],
+      ignored: ["**/src-tauri/**", "**/third_party/**", "**/web-core/target/**"],
     },
+  },
+  preview: {
+    headers: webusb ? isolation : undefined,
+  },
+  worker: {
+    format: "es",
   },
 }));

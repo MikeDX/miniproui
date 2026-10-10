@@ -1,4 +1,5 @@
-import { invoke } from "@tauri-apps/api/core";
+import { isTauri, invoke } from "@tauri-apps/api/core";
+import * as web from "$lib/webusb/client";
 
 export interface ProgrammerStatus {
   connected: boolean;
@@ -98,6 +99,55 @@ export interface LogEvent {
   message: string;
 }
 
+function command<T>(name: string, args: Record<string, unknown> = {}): Promise<T> {
+  if (isTauri()) return invoke<T>(name, args);
+  return web.command<T>(name, args);
+}
+
+export function prepareBrowser(): Promise<void> {
+  if (isTauri()) return Promise.resolve();
+  return web.prepare();
+}
+
+export function onBrowserLog(fn: (message: string) => void): () => void {
+  if (isTauri()) return () => {};
+  return web.onLog(fn);
+}
+
+export function onBrowserProgress(fn: (done: number, total: number) => void): () => void {
+  if (isTauri()) return () => {};
+  return web.onProgress(fn);
+}
+
+export function pickBrowserFile(): Promise<File | null> {
+  return web.pickFile();
+}
+
+export function saveBrowser(encode: (filename: string) => Promise<Uint8Array>): Promise<string> {
+  return web.saveInteractive(encode);
+}
+
+export function encodeBrowser(filename: string): Promise<Uint8Array> {
+  return web.encodeBuffer(filename);
+}
+
+export async function loadBrowserFile(
+  name: string,
+  file: File,
+  page: number,
+  model: string,
+): Promise<FileReport> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const text = await web.loadBytes(name, file.name, page, model, bytes);
+  return JSON.parse(text) as FileReport;
+}
+
+export async function compareBrowserFile(file: File): Promise<DumpReport> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const text = await web.compareBytes(file.name, bytes);
+  return JSON.parse(text) as DumpReport;
+}
+
 export function errorText(err: unknown): string {
   if (typeof err === "string") return err;
   if (err && typeof err === "object" && "message" in err && typeof err.message === "string") {
@@ -107,15 +157,16 @@ export function errorText(err: unknown): string {
 }
 
 export function programmerStatus(force: boolean): Promise<ProgrammerStatus> {
-  return invoke("programmer_status", { force });
+  if (!isTauri() && force) return web.programmerStatus<ProgrammerStatus>(true);
+  return command("programmer_status", { force });
 }
 
 export function searchDevices(query: string, model: string): Promise<SearchResponse> {
-  return invoke("search_devices", { query, model });
+  return command("search_devices", { query, model });
 }
 
 export function deviceInfo(name: string, model: string): Promise<DeviceInfo> {
-  return invoke("device_info", { name, model });
+  return command("device_info", { name, model });
 }
 
 export function loadFile(
@@ -124,19 +175,19 @@ export function loadFile(
   page: number,
   model: string,
 ): Promise<FileReport> {
-  return invoke("load_file", { path, device, page, model });
+  return command("load_file", { path, device, page, model });
 }
 
 export function hexWindow(offset: number, length: number): Promise<HexWindow> {
-  return invoke("hex_window", { offset, length });
+  return command("hex_window", { offset, length });
 }
 
 export function saveBuffer(path: string): Promise<string> {
-  return invoke("save_buffer", { path });
+  return command("save_buffer", { path });
 }
 
 export function readMemory(device: string, page: number): Promise<OpReport> {
-  return invoke("read_memory", { device, page });
+  return command("read_memory", { device, page });
 }
 
 export function writeFile(
@@ -145,43 +196,43 @@ export function writeFile(
   path: string,
   confirm: boolean,
 ): Promise<OpReport> {
-  return invoke("write_file", { device, page, path, confirm });
+  return command("write_file", { device, page, path, confirm });
 }
 
 export function verifyFile(device: string, page: number, path: string): Promise<OpReport> {
-  return invoke("verify_file", { device, page, path });
+  return command("verify_file", { device, page, path });
 }
 
 export function eraseChip(device: string, confirm: boolean): Promise<OpReport> {
-  return invoke("erase", { device, confirm });
+  return command("erase", { device, confirm });
 }
 
 export function blankCheck(device: string): Promise<OpReport> {
-  return invoke("blank_check", { device });
+  return command("blank_check", { device });
 }
 
 export function readId(device: string): Promise<OpReport> {
-  return invoke("read_id", { device });
+  return command("read_id", { device });
 }
 
 export function setOptions(skipId: boolean, icsp: string): Promise<void> {
-  return invoke("set_options", { skipId, icsp });
+  return command("set_options", { skipId, icsp });
 }
 
 export function patchBuffer(offset: number, bytes: number[]): Promise<string> {
-  return invoke("patch_buffer", { offset, bytes });
+  return command("patch_buffer", { offset, bytes });
 }
 
 export function writeBuffer(device: string, page: number, confirm: boolean): Promise<OpReport> {
-  return invoke("write_buffer", { device, page, confirm });
+  return command("write_buffer", { device, page, confirm });
 }
 
 export function verifyBuffer(device: string, page: number): Promise<OpReport> {
-  return invoke("verify_buffer", { device, page });
+  return command("verify_buffer", { device, page });
 }
 
 export function readConfig(device: string): Promise<FuseReading[]> {
-  return invoke("read_config", { device });
+  return command("read_config", { device });
 }
 
 export function writeConfig(
@@ -189,27 +240,27 @@ export function writeConfig(
   fuses: { name: string; value: number }[],
   confirm: boolean,
 ): Promise<OpReport> {
-  return invoke("write_config", { device, fuses, confirm });
+  return command("write_config", { device, fuses, confirm });
 }
 
 export function logicTest(device: string): Promise<LogicReport> {
-  return invoke("logic_test", { device });
+  return command("logic_test", { device });
 }
 
 export function pinCheck(device: string): Promise<PinReport> {
-  return invoke("pin_check", { device });
+  return command("pin_check", { device });
 }
 
 export function hardwareTest(): Promise<OpReport> {
-  return invoke("hardware_test");
+  return command("hardware_test");
 }
 
 export function spiDetect(pins: number): Promise<SpiReport> {
-  return invoke("spi_detect", { pins });
+  return command("spi_detect", { pins });
 }
 
 export function updateFirmware(path: string, confirm: boolean): Promise<OpReport> {
-  return invoke("update_firmware", { path, confirm });
+  return command("update_firmware", { path, confirm });
 }
 
 export interface DumpReport {
@@ -224,13 +275,13 @@ export interface RomIdentReport {
 }
 
 export function bufferReport(): Promise<DumpReport> {
-  return invoke("buffer_report");
+  return command("buffer_report");
 }
 
 export function romIdent(): Promise<RomIdentReport> {
-  return invoke("rom_ident");
+  return command("rom_ident");
 }
 
 export function compareBuffer(path: string): Promise<DumpReport> {
-  return invoke("compare_buffer", { path });
+  return command("compare_buffer", { path });
 }

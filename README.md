@@ -20,4 +20,19 @@ The Mac App Sandbox stays off so the app can open the programmer. Quit the C `mi
 
 Search and file loading work with no programmer attached. Pick the TL866II+ database or the TL866A database in the sidebar. Plug in a programmer to run read, write, verify, erase, blank-check, and read ID.
 
+## Chromium WebUSB
+
+`npm run dev:web` serves the same UI in Chrome or Edge and talks to the programmer with WebUSB. The chip protocol still runs in Rust, compiled to WebAssembly. The page asks for the device when you press Rescan. Firefox and Safari do not implement WebUSB.
+
+Quit the desktop app first. Only one program can claim the programmer. Firmware update and MAME ROM identification stay in the desktop app, because a firmware update reboots the USB device and ROM identification shells out to `mame`.
+
+The dev server sends the cross-origin isolation headers WebAssembly needs for the USB transfers. A static host has to send the same headers:
+
+```
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
+
+`npm run build:web` writes that site to `build/`.
+
 T56 and T76 chips that need an FPGA bitstream look for `algorithm.xml` next to the bundled database, in Homebrew's minipro share directory, or in the Cellar install. That file is not included here.
