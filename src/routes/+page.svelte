@@ -298,12 +298,6 @@
     const selectedPath = await open({
       multiple: false,
       directory: false,
-      filters: [
-        {
-          name: "Firmware",
-          extensions: ["bin", "hex", "ihx", "srec", "s19", "s28", "s37"],
-        },
-      ],
     });
     if (typeof selectedPath === "string") filePath = selectedPath;
   }

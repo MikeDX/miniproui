@@ -295,14 +295,6 @@ export async function pickFile(): Promise<File | null> {
   try {
     const [handle] = await window.showOpenFilePicker({
       multiple: false,
-      types: [
-        {
-          description: "Firmware",
-          accept: {
-            "application/octet-stream": [".bin", ".hex", ".ihx", ".ihex", ".srec", ".s19", ".s28", ".s37", ".jed"],
-          },
-        },
-      ],
     });
     return await handle.getFile();
   } catch (err) {
