@@ -7,17 +7,29 @@
   import HexView from "$lib/HexView.svelte";
   import {
     blankCheck,
+    bufferReport,
+    compareBuffer,
     deviceInfo,
     eraseChip,
     errorText,
+    hardwareTest,
     loadFile,
+    logicTest,
+    patchBuffer,
+    pinCheck,
     programmerStatus,
+    readConfig,
     readId,
+    romIdent,
     readMemory,
     saveBuffer,
     searchDevices,
-    verifyFile,
-    writeFile,
+    setOptions,
+    spiDetect,
+    updateFirmware,
+    verifyBuffer,
+    writeBuffer,
+    writeConfig,
     type DeviceInfo,
     type FileReport,
     type LogEvent,
@@ -45,7 +57,12 @@
   let filePath = $state<string | null>(null);
   let fileReport = $state<FileReport | null>(null);
   let bufferLength = $state(0);
+  let bufferCrc = $state<string | null>(null);
+  let lastReadCrc = $state<string | null>(null);
   let bufferGeneration = $state(0);
+  let skipId = $state(false);
+  let icsp = $state("off");
+  let fuseValues = $state<Record<string, number>>({});
   let working = $state(false);
   let done = $state(0);
   let total = $state(0);
@@ -59,15 +76,7 @@
   let memoryBytes = $derived(
     info ? (page === 1 ? info.dataBytes : info.codeBytes) : 0,
   );
-  let fileReady = $derived(
-    Boolean(
-      info &&
-        filePath &&
-        fileReport?.matches &&
-        fileReport.memoryBytes === memoryBytes &&
-        memoryBytes > 0,
-    ),
-  );
+  let bufferReady = $derived(Boolean(info && bufferLength === memoryBytes && memoryBytes > 0));
   let percent = $derived(total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0);
 
   $effect(() => {
@@ -134,6 +143,26 @@
   });
 
   $effect(() => {
+    void selected;
+    void page;
+    lastReadCrc = null;
+  });
+
+  $effect(() => {
+    const fields = info?.fuses ?? [];
+    const next: Record<string, number> = {};
+    for (const field of fields) next[field.name] = field.defaultValue;
+    fuseValues = next;
+  });
+
+  $effect(() => {
+    if (!isTauri()) return;
+    const skip = skipId;
+    const socket = icsp;
+    setOptions(skip, socket).catch((err) => note(errorText(err)));
+  });
+
+  $effect(() => {
     const path = filePath;
     const name = selected ?? "";
     const model = activeModel;
@@ -148,6 +177,7 @@
         if (cancelled) return;
         fileReport = report;
         bufferLength = report.bufferLength;
+        bufferCrc = report.crc32;
         bufferGeneration += 1;
         note(report.message);
       })
@@ -263,20 +293,57 @@
     if (!selected) return;
     const name = selected;
     const memoryPage = page;
+    const previous = lastReadCrc;
     run(async () => {
       const report = await readMemory(name, memoryPage);
       bufferLength = report.bufferLength;
+      bufferCrc = report.crc32;
       bufferGeneration += 1;
+      if (previous && report.crc32 && previous !== report.crc32) {
+        note(`CRC changed from ${previous} to ${report.crc32}. This dump is not stable.`);
+      }
+      lastReadCrc = report.crc32;
+      noteLines((await bufferReport()).lines);
+    });
+  }
+
+  function noteLines(messages: string[]) {
+    for (const message of messages) note(message);
+  }
+
+  function doRomCheck() {
+    run(async () => {
+      const report = await bufferReport();
+      bufferCrc = report.crc32;
+      noteLines(report.lines);
+    });
+  }
+
+  function doRomIdent() {
+    run(async () => {
+      note("Running mame -romident...");
+      noteLines((await romIdent()).lines);
+    });
+  }
+
+  async function doCompare() {
+    const path = await open({
+      multiple: false,
+      directory: false,
+      title: "Compare buffer with a ROM",
+    });
+    if (typeof path !== "string") return;
+    await run(async () => {
+      noteLines((await compareBuffer(path)).lines);
     });
   }
 
   function doVerify() {
-    if (!selected || !filePath) return;
+    if (!selected || !bufferReady) return;
     const name = selected;
     const memoryPage = page;
-    const path = filePath;
     run(async () => {
-      await verifyFile(name, memoryPage, path);
+      await verifyBuffer(name, memoryPage);
     });
   }
 
@@ -297,18 +364,17 @@
   }
 
   function askWrite() {
-    if (!selected || !filePath || !info) return;
+    if (!selected || !bufferReady) return;
     const name = selected;
-    const path = filePath;
     const bytes = memoryBytes;
     const memoryPage = page;
     const label = memoryPage === 1 ? "data memory" : "code memory";
     confirm = {
       title: `Write ${name}?`,
-      body: `${path}\n\n${bytes} bytes will be programmed to ${label}. The chip ID is checked first.`,
+      body: `${bytes} bytes from the buffer will be programmed to ${label}.`,
       label: "Write",
       run: async () => {
-        await writeFile(name, memoryPage, path, true);
+        await writeBuffer(name, memoryPage, true);
       },
     };
   }
@@ -323,6 +389,97 @@
       label: "Erase",
       run: async () => {
         await eraseChip(name, true);
+      },
+    };
+  }
+
+  async function patchByte(offset: number, value: number) {
+    try {
+      bufferCrc = await patchBuffer(offset, [value]);
+    } catch (err) {
+      note(errorText(err));
+      throw err;
+    }
+  }
+
+  function doReadConfig() {
+    if (!selected) return;
+    const name = selected;
+    run(async () => {
+      const readings = await readConfig(name);
+      const next = { ...fuseValues };
+      for (const reading of readings) next[reading.name] = reading.value & reading.mask;
+      fuseValues = next;
+    });
+  }
+
+  function askWriteConfig() {
+    if (!selected || !info || info.fuses.length === 0) return;
+    const name = selected;
+    const fuses = info.fuses.map((field) => ({
+      name: field.name,
+      value: fuseValues[field.name] ?? field.defaultValue,
+    }));
+    confirm = {
+      title: `Write configuration for ${name}?`,
+      body: `${fuses.length} fuse and lock values will be written.`,
+      label: "Write config",
+      run: async () => {
+        await writeConfig(name, fuses, true);
+      },
+    };
+  }
+
+  function doPinCheck() {
+    if (!selected) return;
+    const name = selected;
+    run(async () => {
+      note((await pinCheck(name)).message);
+    });
+  }
+
+  function doLogic() {
+    if (!selected) return;
+    const name = selected;
+    run(async () => {
+      note((await logicTest(name)).message);
+    });
+  }
+
+  function askHardware() {
+    confirm = {
+      title: "Hardware test",
+      body: "Remove the chip from the socket before running the hardware test.",
+      label: "Run test",
+      run: async () => {
+        await hardwareTest();
+      },
+    };
+  }
+
+  function doSpi(pins: number) {
+    run(async () => {
+      const report = await spiDetect(pins);
+      hits = report.matches;
+      truncated = false;
+      note(`${report.jedecId}: ${report.matches.length} database match(es).`);
+    });
+  }
+
+  async function askFirmware() {
+    if (working) return;
+    const path = await open({
+      multiple: false,
+      title: "Programmer firmware update",
+      filters: [{ name: "Firmware", extensions: ["dat", "bin", "upd"] }],
+    });
+    if (typeof path !== "string") return;
+    confirm = {
+      title: "Update programmer firmware",
+      body: `A wrong file or an interrupted update can brick the programmer. Continue with ${path}?`,
+      label: "Update firmware",
+      run: async () => {
+        await updateFirmware(path, true);
       },
     };
   }
@@ -400,7 +557,7 @@
         <div class="info">
           <strong>{info.name}</strong><br />
           {#if info.manufacturer}{info.manufacturer} · {/if}{info.package}<br />
-          code {info.codeBytes} bytes
+          {info.kind} · code {info.codeBytes} bytes
           {#if info.dataBytes > 0} · data {info.dataBytes} bytes{/if}<br />
           ID {info.chipId} · blank {info.blankValue}
         </div>
@@ -410,15 +567,45 @@
     <section class="main">
       <div class="ops">
         <button class="btn primary" disabled={!connected || !selected || working} onclick={doRead}>Read</button>
-        <button class="btn danger" disabled={!connected || !fileReady || working} onclick={askWrite}>Write</button>
-        <button class="btn" disabled={!connected || !fileReady || working} onclick={doVerify}>Verify</button>
+        <button class="btn danger" disabled={!connected || !bufferReady || working} onclick={askWrite}>Write</button>
+        <button class="btn" disabled={!connected || !bufferReady || working} onclick={doVerify}>Verify</button>
         <button class="btn danger" disabled={!connected || !info?.canErase || working} onclick={askErase}>Erase</button>
         <button class="btn" disabled={!connected || !selected || working} onclick={doBlank}>Blank check</button>
         <button class="btn" disabled={!connected || !selected || working} onclick={doReadId}>Read ID</button>
+        <button class="btn" disabled={!connected || !selected || working} onclick={doPinCheck}>Pin check</button>
+        {#if info?.kind === "logic"}
+          <button class="btn" disabled={!connected || working} onclick={doLogic}>Logic test</button>
+        {/if}
+      </div>
+
+      <div class="options">
+        <label class="check">
+          <input type="checkbox" bind:checked={skipId} disabled={working} />
+          Skip chip ID
+        </label>
+        <label>
+          <span class="muted">Socket</span>
+          <select class="select" bind:value={icsp} disabled={working}>
+            <option value="off">ZIF</option>
+            <option value="no-vcc">ICSP</option>
+            <option value="vcc">ICSP + VCC</option>
+          </select>
+        </label>
+        <button class="btn" disabled={!connected || working} onclick={() => doSpi(8)}>SPI 8</button>
+        <button class="btn" disabled={!connected || working} onclick={() => doSpi(16)}>SPI 16</button>
+        <button class="btn" disabled={!connected || working} onclick={askHardware}>Hardware test</button>
+        <button class="btn quiet" disabled={!connected || working} onclick={askFirmware}>Firmware…</button>
+      </div>
+
+      <div class="options">
+        <span class="muted">ROM</span>
+        <button class="btn" disabled={working || bufferLength === 0} onclick={doRomCheck}>Check</button>
+        <button class="btn" disabled={working || bufferLength === 0} onclick={doRomIdent}>Identify</button>
+        <button class="btn" disabled={working || bufferLength === 0} onclick={doCompare}>Compare…</button>
       </div>
 
       <div class="file-row">
-        <span class="path">{filePath ?? "No file selected"}</span>
+        <span class="path">{filePath ?? "No file selected"}{#if bufferCrc} · CRC32 {bufferCrc}{/if}</span>
         <button class="btn" disabled={working} onclick={chooseFile}>Open</button>
         <button class="btn" disabled={working || bufferLength === 0} onclick={saveRead}>Save</button>
       </div>
@@ -445,6 +632,35 @@
         <p class="banner">{fileReport.message}</p>
       {/if}
 
+      {#if info && info.fuses.length > 0}
+        <div class="fuses">
+          <div class="fuse-head">
+            <strong>Configuration</strong>
+            <button class="btn" disabled={!connected || working} onclick={doReadConfig}>Read config</button>
+            <button class="btn danger" disabled={!connected || working} onclick={askWriteConfig}>Write config</button>
+          </div>
+          <div class="fuse-grid">
+            {#each info.fuses as field (field.name)}
+              <label>
+                <span>{field.name}</span>
+                <input
+                  class="text"
+                  value={(fuseValues[field.name] ?? field.defaultValue).toString(16).toUpperCase().padStart(field.mask > 0xff ? 4 : 2, "0")}
+                  disabled={working}
+                  onchange={(event) => {
+                    const target = event.currentTarget;
+                    if (!(target instanceof HTMLInputElement)) return;
+                    const parsed = Number.parseInt(target.value, 16);
+                    if (Number.isNaN(parsed)) return;
+                    fuseValues = { ...fuseValues, [field.name]: parsed & field.mask };
+                  }}
+                />
+              </label>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
       {#if working}
         <div class="progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow={percent}>
           <div class="bar" class:indeterminate={total === 0} style:width={total === 0 ? undefined : `${percent}%`}></div>
@@ -456,7 +672,7 @@
 
       <div class="hex-wrap">
         {#key bufferGeneration}
-          <HexView length={bufferLength} />
+          <HexView length={bufferLength} editable={bufferLength > 0 && !working} onPatch={patchByte} />
         {/key}
       </div>
 

@@ -1,7 +1,10 @@
+mod roms;
 mod session;
 
+use roms::{DumpReport, RomIdentReport};
 use session::{
-    AppState, DeviceInfo, FileReport, HexWindow, OpReport, ProgrammerStatusDto, SearchResponse,
+    AppState, DeviceInfo, FileReport, FuseReading, FuseWrite, HexWindow, LogicReport, OpReport,
+    PinReport, ProgrammerStatusDto, SearchResponse, SpiReport,
 };
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, Manager, State};
@@ -231,6 +234,201 @@ async fn read_id(
     report_error(&app, result)
 }
 
+#[tauri::command]
+async fn set_options(
+    state: State<'_, AppState>,
+    skip_id: bool,
+    icsp: String,
+) -> Result<(), String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || state.set_options(skip_id, &icsp))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+async fn patch_buffer(
+    state: State<'_, AppState>,
+    offset: u64,
+    bytes: Vec<u8>,
+) -> Result<String, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || state.patch_buffer(offset, &bytes))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+async fn write_buffer(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    device: String,
+    page: u8,
+    confirm: bool,
+) -> Result<OpReport, String> {
+    let state = state.inner().clone();
+    let app2 = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        state.write_buffer(&app2, &device, page, confirm)
+    })
+    .await
+    .map_err(|err| err.to_string())?;
+    report_error(&app, result)
+}
+
+#[tauri::command]
+async fn verify_buffer(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    device: String,
+    page: u8,
+) -> Result<OpReport, String> {
+    let state = state.inner().clone();
+    let app2 = app.clone();
+    let result =
+        tauri::async_runtime::spawn_blocking(move || state.verify_buffer(&app2, &device, page))
+            .await
+            .map_err(|err| err.to_string())?;
+    report_error(&app, result)
+}
+
+#[tauri::command]
+async fn read_config(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    device: String,
+) -> Result<Vec<FuseReading>, String> {
+    let state = state.inner().clone();
+    let app2 = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || state.read_config(&app2, &device))
+        .await
+        .map_err(|err| err.to_string())?;
+    if let Err(ref err) = result {
+        log_line(&app, err);
+    }
+    result
+}
+
+#[tauri::command]
+async fn write_config(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    device: String,
+    fuses: Vec<FuseWrite>,
+    confirm: bool,
+) -> Result<OpReport, String> {
+    let state = state.inner().clone();
+    let app2 = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        state.write_config(&app2, &device, &fuses, confirm)
+    })
+    .await
+    .map_err(|err| err.to_string())?;
+    report_error(&app, result)
+}
+
+#[tauri::command]
+async fn logic_test(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    device: String,
+) -> Result<LogicReport, String> {
+    let state = state.inner().clone();
+    let app2 = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || state.logic_test(&app2, &device))
+        .await
+        .map_err(|err| err.to_string())?;
+    if let Err(ref err) = result {
+        log_line(&app, err);
+    }
+    result
+}
+
+#[tauri::command]
+async fn pin_check(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    device: String,
+) -> Result<PinReport, String> {
+    let state = state.inner().clone();
+    let app2 = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || state.pin_check(&app2, &device))
+        .await
+        .map_err(|err| err.to_string())?;
+    if let Err(ref err) = result {
+        log_line(&app, err);
+    }
+    result
+}
+
+#[tauri::command]
+async fn hardware_test(app: AppHandle, state: State<'_, AppState>) -> Result<OpReport, String> {
+    let state = state.inner().clone();
+    let app2 = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || state.hardware_test(&app2))
+        .await
+        .map_err(|err| err.to_string())?;
+    report_error(&app, result)
+}
+
+#[tauri::command]
+async fn spi_detect(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    pins: u8,
+) -> Result<SpiReport, String> {
+    let state = state.inner().clone();
+    let app2 = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || state.spi_detect(&app2, pins))
+        .await
+        .map_err(|err| err.to_string())?;
+    if let Err(ref err) = result {
+        log_line(&app, err);
+    }
+    result
+}
+
+#[tauri::command]
+async fn buffer_report(state: State<'_, AppState>) -> Result<DumpReport, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || state.buffer_report())
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+async fn rom_ident(state: State<'_, AppState>) -> Result<RomIdentReport, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || state.rom_ident())
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+async fn compare_buffer(state: State<'_, AppState>, path: String) -> Result<DumpReport, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || state.compare_buffer(PathBuf::from(path)))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+async fn update_firmware(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+    confirm: bool,
+) -> Result<OpReport, String> {
+    let state = state.inner().clone();
+    let app2 = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        state.update_firmware(&app2, PathBuf::from(&path).as_path(), confirm)
+    })
+    .await
+    .map_err(|err| err.to_string())?;
+    report_error(&app, result)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -253,7 +451,21 @@ pub fn run() {
             verify_file,
             erase,
             blank_check,
-            read_id
+            read_id,
+            set_options,
+            patch_buffer,
+            write_buffer,
+            verify_buffer,
+            read_config,
+            write_config,
+            logic_test,
+            pin_check,
+            hardware_test,
+            spi_detect,
+            update_firmware,
+            buffer_report,
+            rom_ident,
+            compare_buffer
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

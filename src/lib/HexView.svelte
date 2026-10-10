@@ -1,7 +1,15 @@
 <script lang="ts">
   import { hexWindow } from "$lib/api";
 
-  let { length }: { length: number } = $props();
+  let {
+    length,
+    editable = false,
+    onPatch,
+  }: {
+    length: number;
+    editable?: boolean;
+    onPatch?: (offset: number, value: number) => Promise<void>;
+  } = $props();
 
   const rowBytes = 16;
   const rowHeight = 18;
@@ -10,6 +18,8 @@
   let scroller = $state<HTMLDivElement | null>(null);
   let windowOffset = $state(0);
   let windowBytes = $state<number[]>([]);
+  let editOffset = $state<number | null>(null);
+  let nibble = $state("");
 
   let rows = $derived(Math.ceil(length / rowBytes));
   let start = $derived(Math.max(0, Math.floor(scrollTop / rowHeight) - 8));
@@ -62,6 +72,43 @@
     if (value === undefined) return " ";
     return value >= 0x20 && value <= 0x7e ? String.fromCharCode(value) : ".";
   }
+
+  function cellText(offset: number, value: number | undefined): string {
+    if (editOffset === offset && nibble.length > 0) return `${nibble}_`.slice(0, 2);
+    return hexCell(value);
+  }
+
+  function beginEdit(offset: number) {
+    if (!editable || offset >= length) return;
+    editOffset = offset;
+    nibble = "";
+  }
+
+  async function onKey(event: KeyboardEvent) {
+    if (!editable || editOffset === null) return;
+    const key = event.key.toLowerCase();
+    if (key === "escape") {
+      editOffset = null;
+      nibble = "";
+      return;
+    }
+    if (!/^[0-9a-f]$/.test(key)) return;
+    event.preventDefault();
+    nibble += key;
+    if (nibble.length < 2) return;
+    const value = Number.parseInt(nibble, 16);
+    const offset = editOffset;
+    nibble = "";
+    editOffset = null;
+    const index = offset - windowOffset;
+    const previous = windowBytes[index];
+    if (index >= 0 && index < windowBytes.length) windowBytes[index] = value;
+    try {
+      await onPatch?.(offset, value);
+    } catch {
+      if (index >= 0 && previous !== undefined) windowBytes[index] = previous;
+    }
+  }
 </script>
 
 <div class="hex">
@@ -86,11 +133,27 @@
             <div class="hex-row" style:height="{rowHeight}px">
               <span class="offset">{(row * rowBytes).toString(16).padStart(8, "0")}</span>
               <span class="bytes">
-                {hexCell(bytes[0])} {hexCell(bytes[1])} {hexCell(bytes[2])} {hexCell(bytes[3])}
-                {hexCell(bytes[4])} {hexCell(bytes[5])} {hexCell(bytes[6])} {hexCell(bytes[7])}
+                {#each [0, 1, 2, 3, 4, 5, 6, 7] as column}
+                  {@const offset = row * rowBytes + column}
+                  <button
+                    type="button"
+                    class="cell"
+                    class:editing={editOffset === offset}
+                    onclick={() => beginEdit(offset)}
+                    onkeydown={onKey}
+                  >{cellText(offset, bytes[column])}</button>
+                {/each}
                 <span class="gap"></span>
-                {hexCell(bytes[8])} {hexCell(bytes[9])} {hexCell(bytes[10])} {hexCell(bytes[11])}
-                {hexCell(bytes[12])} {hexCell(bytes[13])} {hexCell(bytes[14])} {hexCell(bytes[15])}
+                {#each [8, 9, 10, 11, 12, 13, 14, 15] as column}
+                  {@const offset = row * rowBytes + column}
+                  <button
+                    type="button"
+                    class="cell"
+                    class:editing={editOffset === offset}
+                    onclick={() => beginEdit(offset)}
+                    onkeydown={onKey}
+                  >{cellText(offset, bytes[column])}</button>
+                {/each}
               </span>
               <span class="ascii">{bytes.map(asciiCell).join("")}</span>
             </div>
@@ -156,6 +219,10 @@
     color: #d5d8e2;
   }
 
+  .bytes {
+    white-space: normal;
+  }
+
   .offset {
     color: #7f8cff;
   }
@@ -167,5 +234,20 @@
 
   .ascii {
     color: #b7c3a1;
+  }
+
+  .cell {
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    border: 0;
+    padding: 0;
+    min-width: 1.35em;
+    margin-right: 0.2em;
+  }
+
+  .cell.editing {
+    background: #31568f;
+    border-radius: 2px;
   }
 </style>

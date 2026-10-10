@@ -206,8 +206,63 @@ button:disabled {
   padding: 10px;
 }
 
-.ops {
+.ops,
+.options {
   flex-wrap: wrap;
+}
+
+.options {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.check {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: #c5cad6;
+  font-size: 13px;
+}
+
+.btn.quiet {
+  opacity: 0.75;
+}
+
+.fuses {
+  border: 1px solid #343846;
+  border-radius: 8px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.fuse-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.fuse-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 6px 10px;
+  max-height: 160px;
+  overflow: auto;
+}
+
+.fuse-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 11px;
+  color: #9aa3b2;
+}
+
+.fuse-grid .text {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  text-transform: uppercase;
 }
 
 .path {

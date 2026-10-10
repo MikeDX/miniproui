@@ -30,6 +30,40 @@ export interface DeviceInfo {
   hasChipId: boolean;
   blankValue: string;
   canErase: boolean;
+  kind: string;
+  fuses: FuseFieldInfo[];
+}
+
+export interface FuseFieldInfo {
+  name: string;
+  mask: number;
+  defaultValue: number;
+  group: string;
+}
+
+export interface FuseReading {
+  name: string;
+  value: number;
+  mask: number;
+  group: string;
+}
+
+export interface LogicReport {
+  pass: boolean;
+  errors: number;
+  pinCount: number;
+  vectorCount: number;
+  message: string;
+}
+
+export interface PinReport {
+  message: string;
+  badPins: number[];
+}
+
+export interface SpiReport {
+  jedecId: string;
+  matches: SearchHit[];
 }
 
 export interface FileReport {
@@ -38,6 +72,7 @@ export interface FileReport {
   bufferLength: number;
   memoryBytes: number;
   fileBytes: number;
+  crc32: string;
 }
 
 export interface OpReport {
@@ -127,4 +162,75 @@ export function blankCheck(device: string): Promise<OpReport> {
 
 export function readId(device: string): Promise<OpReport> {
   return invoke("read_id", { device });
+}
+
+export function setOptions(skipId: boolean, icsp: string): Promise<void> {
+  return invoke("set_options", { skipId, icsp });
+}
+
+export function patchBuffer(offset: number, bytes: number[]): Promise<string> {
+  return invoke("patch_buffer", { offset, bytes });
+}
+
+export function writeBuffer(device: string, page: number, confirm: boolean): Promise<OpReport> {
+  return invoke("write_buffer", { device, page, confirm });
+}
+
+export function verifyBuffer(device: string, page: number): Promise<OpReport> {
+  return invoke("verify_buffer", { device, page });
+}
+
+export function readConfig(device: string): Promise<FuseReading[]> {
+  return invoke("read_config", { device });
+}
+
+export function writeConfig(
+  device: string,
+  fuses: { name: string; value: number }[],
+  confirm: boolean,
+): Promise<OpReport> {
+  return invoke("write_config", { device, fuses, confirm });
+}
+
+export function logicTest(device: string): Promise<LogicReport> {
+  return invoke("logic_test", { device });
+}
+
+export function pinCheck(device: string): Promise<PinReport> {
+  return invoke("pin_check", { device });
+}
+
+export function hardwareTest(): Promise<OpReport> {
+  return invoke("hardware_test");
+}
+
+export function spiDetect(pins: number): Promise<SpiReport> {
+  return invoke("spi_detect", { pins });
+}
+
+export function updateFirmware(path: string, confirm: boolean): Promise<OpReport> {
+  return invoke("update_firmware", { path, confirm });
+}
+
+export interface DumpReport {
+  crc32: string;
+  sha1: string;
+  length: number;
+  lines: string[];
+}
+
+export interface RomIdentReport {
+  lines: string[];
+}
+
+export function bufferReport(): Promise<DumpReport> {
+  return invoke("buffer_report");
+}
+
+export function romIdent(): Promise<RomIdentReport> {
+  return invoke("rom_ident");
+}
+
+export function compareBuffer(path: string): Promise<DumpReport> {
+  return invoke("compare_buffer", { path });
 }

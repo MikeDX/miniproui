@@ -15,6 +15,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+crc = "3"
+sha1 = "0.10"
 minipro-core = { path = "../third_party/minipro-rs/crates/minipro-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

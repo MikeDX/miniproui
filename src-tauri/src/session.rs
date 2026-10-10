@@ -11,14 +11,15 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use minipro_core::database::{find_device, list_devices_for_model, DatabasePaths, DeviceListItem};
-use minipro_core::device::{Device, ProgrammerModel};
+use minipro_core::device::{ChipConfig, Device, ProgrammerModel, ICSP_ENABLE, ICSP_VCC};
 use minipro_core::error::MiniproError;
 use minipro_core::handle::MiniproHandle;
 use minipro_core::operations::{
-    blank_check, erase_chip, read_chip, read_file, verify_chip_bytes, write_chip_bytes, write_file,
-    SizeMismatch,
+    blank_check, erase_chip, firmware_update, logic_ic_test, pin_contact_check, read_chip,
+    read_file, read_fuses, spi_autodetect_and_lookup, verify_chip_bytes, write_chip_bytes,
+    write_file, write_fuses, FuseValue, SizeMismatch,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
 const SEARCH_LIMIT: usize = 200;
@@ -37,6 +38,8 @@ struct Session {
     last_info: Option<LastInfo>,
     buffer_path: PathBuf,
     buffer_len: u64,
+    skip_id: bool,
+    icsp: u8,
 }
 
 struct LastInfo {
@@ -83,6 +86,57 @@ pub struct DeviceInfo {
     pub has_chip_id: bool,
     pub blank_value: String,
     pub can_erase: bool,
+    pub kind: String,
+    pub fuses: Vec<FuseFieldInfo>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FuseFieldInfo {
+    pub name: String,
+    pub mask: u16,
+    pub default_value: u16,
+    pub group: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FuseWrite {
+    pub name: String,
+    pub value: u16,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FuseReading {
+    pub name: String,
+    pub value: u16,
+    pub mask: u16,
+    pub group: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogicReport {
+    pub pass: bool,
+    pub errors: u32,
+    pub pin_count: u16,
+    pub vector_count: u16,
+    pub message: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PinReport {
+    pub message: String,
+    pub bad_pins: Vec<u16>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpiReport {
+    pub jedec_id: String,
+    pub matches: Vec<SearchHit>,
 }
 
 #[derive(Debug, Serialize)]
@@ -93,6 +147,7 @@ pub struct FileReport {
     pub buffer_length: u64,
     pub memory_bytes: u64,
     pub file_bytes: u64,
+    pub crc32: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -170,6 +225,8 @@ impl AppState {
                 last_info: None,
                 buffer_path,
                 buffer_len: 0,
+                skip_id: false,
+                icsp: 0,
             })),
             index: Arc::new(Mutex::new(HashMap::new())),
         })
@@ -290,6 +347,7 @@ impl AppState {
                 buffer_length: len,
                 memory_bytes: 0,
                 file_bytes,
+                crc32: crc_hex(&bytes),
             });
         };
 
@@ -314,6 +372,7 @@ impl AppState {
                 buffer_length: bytes.len() as u64,
                 memory_bytes: memory as u64,
                 file_bytes,
+                crc32: crc_hex(&bytes),
             });
         }
 
@@ -327,6 +386,7 @@ impl AppState {
             buffer_length: decoded.len() as u64,
             memory_bytes: memory as u64,
             file_bytes,
+            crc32: crc_hex(&decoded),
         })
     }
 
@@ -377,6 +437,7 @@ impl AppState {
         let mut guard = self.busy_guard()?;
         let handle = guard.handle.as_mut().expect("handle");
         let result = (|| {
+            let check_id = self.prepare(handle);
             let device = lookup(&self.db, handle, name)?;
             let memory = page_size(&device, page).map_err(Fail::Soft)?;
             log_line(
@@ -387,7 +448,7 @@ impl AppState {
             let app = app.clone();
             let stats = transaction(handle, device, |handle| {
                 let mut progress = make_progress(app.clone());
-                read_chip(handle, &path, page, "bin", true, Some(&mut progress))
+                read_chip(handle, &path, page, "bin", check_id, Some(&mut progress))
             })
             .map_err(classify)?;
             lock(&self.session).buffer_len = stats.bytes as u64;
@@ -426,6 +487,7 @@ impl AppState {
             if !confirm {
                 return Err(Fail::Soft("Write requires confirmation.".into()));
             }
+            let check_id = self.prepare(handle);
             let device = lookup(&self.db, handle, name)?;
             let image = image_for(path, &device, page).map_err(Fail::Soft)?;
             let len = image.len();
@@ -442,7 +504,7 @@ impl AppState {
                     page,
                     SizeMismatch::Error,
                     false,
-                    true,
+                    check_id,
                     Some(&mut progress),
                 )
             })
@@ -478,6 +540,7 @@ impl AppState {
         let mut guard = self.busy_guard()?;
         let handle = guard.handle.as_mut().expect("handle");
         let result = (|| {
+            let check_id = self.prepare(handle);
             let device = lookup(&self.db, handle, name)?;
             let image = image_for(path, &device, page).map_err(Fail::Soft)?;
             let len = image.len() as u64;
@@ -488,7 +551,7 @@ impl AppState {
             let app = app.clone();
             transaction(handle, device, |handle| {
                 let mut progress = make_progress(app.clone());
-                verify_chip_bytes(handle, image, page, true, Some(&mut progress))
+                verify_chip_bytes(handle, image, page, check_id, Some(&mut progress))
             })
             .map_err(classify)?;
             let _ = app.emit(
@@ -513,6 +576,7 @@ impl AppState {
             if !confirm {
                 return Err(Fail::Soft("Erase requires confirmation.".into()));
             }
+            let check_id = self.prepare(handle);
             let device = lookup(&self.db, handle, name)?;
             if !device.flags.can_erase {
                 return Err(Fail::Soft(
@@ -520,7 +584,7 @@ impl AppState {
                 ));
             }
             log_line(app, format!("Erasing {name}..."));
-            transaction(handle, device, |handle| erase_chip(handle, true)).map_err(classify)?;
+            transaction(handle, device, |handle| erase_chip(handle, check_id)).map_err(classify)?;
             let message = format!("Erased {name}.");
             log_line(&app, &message);
             Ok(report(message, 0, None, None, buffer_len(&self.session)))
@@ -533,6 +597,7 @@ impl AppState {
         let mut guard = self.busy_guard()?;
         let handle = guard.handle.as_mut().expect("handle");
         let result = (|| {
+            self.prepare(handle);
             let device = lookup(&self.db, handle, name)?;
             log_line(app, format!("Blank-checking {name}..."));
             transaction(handle, device, |handle| blank_check(handle)).map_err(classify)?;
@@ -548,6 +613,7 @@ impl AppState {
         let mut guard = self.busy_guard()?;
         let handle = guard.handle.as_mut().expect("handle");
         let result = (|| {
+            self.prepare(handle);
             let device = lookup(&self.db, handle, name)?;
             if !device.flags.has_chip_id {
                 return Err(Fail::Soft("This device does not support chip ID.".into()));
@@ -577,6 +643,458 @@ impl AppState {
         })();
         guard.fatal = is_fatal(&result);
         result.map_err(fail_message)
+    }
+
+    pub fn set_options(&self, skip_id: bool, icsp: &str) -> Result<(), String> {
+        let icsp = match icsp {
+            "off" | "zif" => 0,
+            "no-vcc" => ICSP_ENABLE,
+            "vcc" => ICSP_ENABLE | ICSP_VCC,
+            other => return Err(format!("Unknown socket mode '{other}'.")),
+        };
+        let mut session = lock(&self.session);
+        session.skip_id = skip_id;
+        session.icsp = icsp;
+        if let Some(handle) = session.handle.as_mut() {
+            handle.icsp = icsp;
+        }
+        Ok(())
+    }
+
+    pub fn patch_buffer(&self, offset: u64, bytes: &[u8]) -> Result<String, String> {
+        let mut session = lock(&self.session);
+        if session.busy {
+            return Err("Another operation is already running.".into());
+        }
+        let end = offset
+            .checked_add(bytes.len() as u64)
+            .ok_or_else(|| "Patch is outside the buffer.".to_string())?;
+        if end > session.buffer_len {
+            return Err("Patch is outside the buffer.".into());
+        }
+        let mut file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&session.buffer_path)
+            .map_err(|err| format!("cannot open buffer: {err}"))?;
+        file.seek(SeekFrom::Start(offset))
+            .map_err(|err| format!("cannot seek buffer: {err}"))?;
+        use std::io::Write;
+        file.write_all(bytes)
+            .map_err(|err| format!("cannot write buffer: {err}"))?;
+        file.seek(SeekFrom::Start(0))
+            .map_err(|err| format!("cannot rewind buffer: {err}"))?;
+        let mut data = Vec::new();
+        file.read_to_end(&mut data)
+            .map_err(|err| format!("cannot read buffer: {err}"))?;
+        session.buffer_len = data.len() as u64;
+        Ok(crc_hex(&data))
+    }
+
+    pub fn buffer_report(&self) -> Result<crate::roms::DumpReport, String> {
+        Ok(crate::roms::analyze(&self.buffer_bytes()?))
+    }
+
+    pub fn rom_ident(&self) -> Result<crate::roms::RomI dentReport, String> {
+        let bytes = self.buffer_bytes()?;
+        let path = {
+            let session = lock(&self.session);
+            session.buffer_path.clone()
+        };
+        let mut report = crate::roms::mame_romident(&path)?;
+        let notes = crate::roms::analyze(&bytes).lines;
+        report.lines.splice(0..0, notes);
+        Ok(report)
+    }
+
+    pub fn compare_buffer(&self, path: PathBuf) -> Result<crate::roms::DumpReport, String> {
+        let dump = self.buffer_bytes()?;
+        let other =
+            fs::read(&path).map_err(|err| format!("cannot read {}: {err}", path.display()))?;
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("file");
+        let mut report = crate::roms::analyze(&dump);
+        report.lines = crate::roms::compare(&dump, &other, name);
+        Ok(report)
+    }
+
+    fn buffer_bytes(&self) -> Result<Vec<u8>, String> {
+        let path = {
+            let session = lock(&self.session);
+            if session.buffer_len == 0 {
+                return Err("Read a chip or open a file first.".into());
+            }
+            session.buffer_path.clone()
+        };
+        let data = fs::read(&path).map_err(|err| format!("cannot read buffer: {err}"))?;
+        if data.is_empty() {
+            return Err("The buffer is empty.".into());
+        }
+        Ok(data)
+    }
+
+    pub fn write_buffer(
+        &self,
+        app: &AppHandle,
+        name: &str,
+        page: u8,
+        confirm: bool,
+    ) -> Result<OpReport, String> {
+        let mut guard = self.busy_guard()?;
+        let handle = guard.handle.as_mut().expect("handle");
+        let result = (|| {
+            if !confirm {
+                return Err(Fail::Soft("Write requires confirmation.".into()));
+            }
+            let check_id = self.prepare(handle);
+            let device = lookup(&self.db, handle, name)?;
+            let memory = page_size(&device, page).map_err(Fail::Soft)?;
+            let image = self.buffer_image(memory).map_err(Fail::Soft)?;
+            let len = image.len();
+            log_line(
+                app,
+                format!(
+                    "Writing buffer ({len} bytes) to {name} ({})...",
+                    page_name(page)
+                ),
+            );
+            let app = app.clone();
+            let stats = transaction(handle, device, |handle| {
+                let mut progress = make_progress(app.clone());
+                write_chip_bytes(
+                    handle,
+                    image,
+                    page,
+                    SizeMismatch::Error,
+                    false,
+                    check_id,
+                    Some(&mut progress),
+                )
+            })
+            .map_err(classify)?;
+            let message = format!("Wrote {} bytes, CRC32 {:08x}.", stats.bytes, stats.crc32);
+            log_line(&app, &message);
+            Ok(report(
+                message,
+                stats.bytes as u64,
+                Some(stats.crc32),
+                None,
+                buffer_len(&self.session),
+            ))
+        })();
+        guard.fatal = is_fatal(&result);
+        result.map_err(fail_message)
+    }
+
+    pub fn verify_buffer(&self, app: &AppHandle, name: &str, page: u8) -> Result<OpReport, String> {
+        let mut guard = self.busy_guard()?;
+        let handle = guard.handle.as_mut().expect("handle");
+        let result = (|| {
+            let check_id = self.prepare(handle);
+            let device = lookup(&self.db, handle, name)?;
+            let memory = page_size(&device, page).map_err(Fail::Soft)?;
+            let image = self.buffer_image(memory).map_err(Fail::Soft)?;
+            let len = image.len() as u64;
+            log_line(
+                app,
+                format!(
+                    "Verifying buffer ({len} bytes) against {name} ({})...",
+                    page_name(page)
+                ),
+            );
+            let app = app.clone();
+            transaction(handle, device, |handle| {
+                let mut progress = make_progress(app.clone());
+                verify_chip_bytes(handle, image, page, check_id, Some(&mut progress))
+            })
+            .map_err(classify)?;
+            let message = format!("Verify passed ({len} bytes).");
+            log_line(&app, &message);
+            Ok(report(message, len, None, None, buffer_len(&self.session)))
+        })();
+        guard.fatal = is_fatal(&result);
+        result.map_err(fail_message)
+    }
+
+    pub fn read_config(&self, app: &AppHandle, name: &str) -> Result<Vec<FuseReading>, String> {
+        let mut guard = self.busy_guard()?;
+        let handle = guard.handle.as_mut().expect("handle");
+        let result = (|| {
+            self.prepare(handle);
+            let device = lookup(&self.db, handle, name)?;
+            let fields = fuse_fields(&device);
+            if fields.is_empty() {
+                return Err(Fail::Soft("This device has no fuse configuration.".into()));
+            }
+            log_line(app, format!("Reading configuration for {name}..."));
+            let values =
+                transaction(handle, device, |handle| read_fuses(handle)).map_err(classify)?;
+            let readings = fields
+                .into_iter()
+                .map(|field| {
+                    let value = values
+                        .iter()
+                        .find(|item| item.name == field.name)
+                        .map(|item| item.value)
+                        .unwrap_or(0xffff);
+                    FuseReading {
+                        name: field.name,
+                        value,
+                        mask: field.mask,
+                        group: field.group,
+                    }
+                })
+                .collect();
+            log_line(app, "Configuration read.");
+            Ok(readings)
+        })();
+        guard.fatal = is_fatal(&result);
+        result.map_err(fail_message)
+    }
+
+    pub fn write_config(
+        &self,
+        app: &AppHandle,
+        name: &str,
+        updates: &[FuseWrite],
+        confirm: bool,
+    ) -> Result<OpReport, String> {
+        let mut guard = self.busy_guard()?;
+        let handle = guard.handle.as_mut().expect("handle");
+        let result = (|| {
+            if !confirm {
+                return Err(Fail::Soft(
+                    "Writing configuration requires confirmation.".into(),
+                ));
+            }
+            self.prepare(handle);
+            let device = lookup(&self.db, handle, name)?;
+            let fields = fuse_fields(&device);
+            if fields.is_empty() {
+                return Err(Fail::Soft("This device has no fuse configuration.".into()));
+            }
+            let fuses = fields
+                .iter()
+                .map(|field| {
+                    let value = updates
+                        .iter()
+                        .find(|item| item.name == field.name)
+                        .map(|item| item.value)
+                        .ok_or_else(|| Fail::Soft(format!("Missing value for {}.", field.name)))?;
+                    Ok(FuseValue {
+                        name: field.name.clone(),
+                        value,
+                    })
+                })
+                .collect::<Result<Vec<_>, Fail>>()?;
+            log_line(app, format!("Writing configuration for {name}..."));
+            transaction(handle, device, |handle| write_fuses(handle, &fuses)).map_err(classify)?;
+            let message = format!("Wrote {} configuration fields.", fuses.len());
+            log_line(&app, &message);
+            Ok(report(message, 0, None, None, buffer_len(&self.session)))
+        })();
+        guard.fatal = is_fatal(&result);
+        result.map_err(fail_message)
+    }
+
+    pub fn logic_test(&self, app: &AppHandle, name: &str) -> Result<LogicReport, String> {
+        let mut guard = self.busy_guard()?;
+        let handle = guard.handle.as_mut().expect("handle");
+        let result = (|| {
+            self.prepare(handle);
+            let device = lookup(&self.db, handle, name)?;
+            if device.chip_type != 5 {
+                return Err(Fail::Soft("Logic test only applies to logic ICs.".into()));
+            }
+            log_line(app, format!("Testing logic IC {name}..."));
+            let report =
+                transaction(handle, device, |handle| logic_ic_test(handle)).map_err(classify)?;
+            let message = if report.pass {
+                format!(
+                    "Logic test passed ({} pins, {} vectors).",
+                    report.pin_count, report.vector_count
+                )
+            } else {
+                format!(
+                    "Logic test failed: {} pin errors across {} vectors.",
+                    report.errors, report.vector_count
+                )
+            };
+            log_line(&app, &message);
+            Ok(LogicReport {
+                pass: report.pass,
+                errors: report.errors,
+                pin_count: report.pin_count,
+                vector_count: report.vector_count,
+                message,
+            })
+        })();
+        guard.fatal = is_fatal(&result);
+        result.map_err(fail_message)
+    }
+
+    pub fn pin_check(&self, app: &AppHandle, name: &str) -> Result<PinReport, String> {
+        let mut guard = self.busy_guard()?;
+        let handle = guard.handle.as_mut().expect("handle");
+        let infoic = self.db.infoic.clone();
+        let result = (|| {
+            self.prepare(handle);
+            let device = lookup(&self.db, handle, name)?;
+            if device.pin_map & 0xff == 0 {
+                return Err(Fail::Soft(
+                    "Pin contact check is not available for this device.".into(),
+                ));
+            }
+            log_line(app, format!("Checking pin contact for {name}..."));
+            let report = transaction(handle, device, |handle| pin_contact_check(handle, &infoic))
+                .map_err(classify)?;
+            let message = if report.bad_pins.is_empty() {
+                "All tested pins made contact.".into()
+            } else {
+                let pins = report
+                    .bad_pins
+                    .iter()
+                    .map(|pin| pin.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let mut message = format!("Poor contact on pin {pins}.");
+                if report.bad_pins.len() >= 8 {
+                    message.push_str(
+                        " Seat a DIP at the bottom of the ZIF, against the lever, and close it firmly. Open address or data pins make every read return a different CRC.",
+                    );
+                }
+                message
+            };
+            log_line(&app, &message);
+            Ok(PinReport {
+                message,
+                bad_pins: report.bad_pins,
+            })
+        })();
+        guard.fatal = is_fatal(&result);
+        result.map_err(fail_message)
+    }
+
+    pub fn hardware_test(&self, app: &AppHandle) -> Result<OpReport, String> {
+        let mut guard = self.busy_guard()?;
+        let handle = guard.handle.as_mut().expect("handle");
+        let result = (|| {
+            log_line(app, "Running programmer hardware test...");
+            minipro_core::operations::hardware_check(handle).map_err(classify)?;
+            let message = "Hardware test passed.".to_string();
+            log_line(&app, &message);
+            Ok(report(message, 0, None, None, buffer_len(&self.session)))
+        })();
+        guard.fatal = is_fatal(&result);
+        result.map_err(fail_message)
+    }
+
+    pub fn spi_detect(&self, app: &AppHandle, pins: u8) -> Result<SpiReport, String> {
+        let id_type = match pins {
+            8 => 0,
+            16 => 1,
+            _ => return Err("SPI detect supports 8-pin or 16-pin packages.".into()),
+        };
+        let mut guard = self.busy_guard()?;
+        let handle = guard.handle.as_mut().expect("handle");
+        let result = (|| {
+            log_line(app, format!("Detecting {pins}-pin SPI device..."));
+            let found = spi_autodetect_and_lookup(handle, &self.db, id_type).map_err(classify)?;
+            let matches = found
+                .matches
+                .into_iter()
+                .take(20)
+                .map(|item| SearchHit {
+                    name: item.name,
+                    manufacturer: item.manufacturer,
+                })
+                .collect::<Vec<_>>();
+            let message = if matches.is_empty() {
+                format!("JEDEC ID {:#010x}, no database match.", found.jedec_id)
+            } else {
+                format!(
+                    "JEDEC ID {:#010x}, {} match{}.",
+                    found.jedec_id,
+                    matches.len(),
+                    if matches.len() == 1 { "" } else { "es" }
+                )
+            };
+            log_line(&app, &message);
+            Ok(SpiReport {
+                jedec_id: format!("{:#010x}", found.jedec_id),
+                matches,
+            })
+        })();
+        guard.fatal = is_fatal(&result);
+        result.map_err(fail_message)
+    }
+
+    pub fn update_firmware(
+        &self,
+        app: &AppHandle,
+        path: &Path,
+        confirm: bool,
+    ) -> Result<OpReport, String> {
+        let mut guard = self.busy_guard()?;
+        let handle = guard.handle.as_mut().expect("handle");
+        let mut started = false;
+        let result = (|| {
+            if !confirm {
+                return Err(Fail::Soft("Firmware update requires confirmation.".into()));
+            }
+            let data =
+                fs::read(path).map_err(|err| Fail::Soft(format!("cannot read firmware: {err}")))?;
+            if data.is_empty() {
+                return Err(Fail::Soft("Firmware file is empty.".into()));
+            }
+            started = true;
+            log_line(
+                app,
+                "Updating firmware. Leave the programmer connected until this finishes.",
+            );
+            let app = app.clone();
+            let mut sink = Vec::new();
+            let mut progress = make_progress(app.clone());
+            firmware_update(handle, &data, &mut sink, Some(&mut progress)).map_err(classify)?;
+            let note = String::from_utf8_lossy(&sink);
+            let message = if note.trim().is_empty() {
+                "Firmware update finished. Rescan the programmer.".to_string()
+            } else {
+                format!("Firmware update finished. {}", note.trim())
+            };
+            log_line(&app, &message);
+            Ok(report(message, data.len() as u64, None, None, 0))
+        })();
+        guard.fatal = started || is_fatal(&result);
+        result.map_err(fail_message)
+    }
+
+    fn prepare(&self, handle: &mut MiniproHandle) -> bool {
+        let session = lock(&self.session);
+        handle.icsp = session.icsp;
+        !session.skip_id
+    }
+
+    fn buffer_image(&self, memory: usize) -> Result<Vec<u8>, String> {
+        let (path, len) = {
+            let session = lock(&self.session);
+            (session.buffer_path.clone(), session.buffer_len)
+        };
+        if len as usize != memory {
+            return Err(format!(
+                "Buffer is {len} bytes, but this memory is {memory} bytes."
+            ));
+        }
+        let data = fs::read(&path).map_err(|err| format!("cannot read buffer: {err}"))?;
+        if data.len() != memory {
+            return Err(format!(
+                "Buffer is {} bytes, but this memory is {memory} bytes.",
+                data.len()
+            ));
+        }
+        Ok(data)
     }
 
     fn busy_guard(&self) -> Result<BusyGuard<'_>, String> {
@@ -700,6 +1218,7 @@ fn device_info(name: &str, device: &Device) -> DeviceInfo {
     } else {
         format!("{:#06x}", device.blank_value)
     };
+    let fuses = fuse_fields(device);
     DeviceInfo {
         name: name.to_string(),
         manufacturer: device.manufacturer.clone(),
@@ -710,7 +1229,54 @@ fn device_info(name: &str, device: &Device) -> DeviceInfo {
         has_chip_id: device.flags.has_chip_id,
         blank_value,
         can_erase: device.flags.can_erase,
+        kind: kind_name(device.chip_type).to_string(),
+        fuses,
     }
+}
+
+fn kind_name(chip_type: u32) -> &'static str {
+    match chip_type {
+        1 => "memory",
+        2 => "mcu",
+        3 => "pld",
+        4 => "sram",
+        5 => "logic",
+        6 => "nand",
+        7 => "emmc",
+        8 => "vga",
+        _ => "other",
+    }
+}
+
+fn fuse_fields(device: &Device) -> Vec<FuseFieldInfo> {
+    let Some(ChipConfig::Mcu(config)) = device.config.as_ref() else {
+        return Vec::new();
+    };
+    let mut fields = Vec::new();
+    for field in &config.fuses {
+        fields.push(FuseFieldInfo {
+            name: field.name.clone(),
+            mask: field.mask,
+            default_value: field.default,
+            group: "fuse".into(),
+        });
+    }
+    for field in &config.locks {
+        fields.push(FuseFieldInfo {
+            name: field.name.clone(),
+            mask: field.mask,
+            default_value: field.default,
+            group: "lock".into(),
+        });
+    }
+    fields
+}
+
+fn crc_hex(data: &[u8]) -> String {
+    format!(
+        "{:08x}",
+        crc::Crc::<u32>::new(&crc::CRC_32_ISO_HDLC).checksum(data)
+    )
 }
 
 fn report(
@@ -938,6 +1504,11 @@ mod tests {
 
         let window = state.hex_window(0, 16).unwrap();
         assert_eq!(window.bytes, vec![0xA5u8; 16]);
+        assert!(!info.fuses.is_empty(), "ATMEGA48 should expose fuse fields");
+        let crc = state.patch_buffer(0, &[0x11]).unwrap();
+        assert!(!crc.is_empty());
+        let window = state.hex_window(0, 1).unwrap();
+        assert_eq!(window.bytes, vec![0x11]);
         let _ = fs::remove_file(&mismatch);
         let _ = fs::remove_file(&exact);
     }
