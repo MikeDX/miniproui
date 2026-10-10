@@ -1,10 +1,18 @@
 # miniproui
 
-A desktop app for XGecu TL866A/CS, TL866II+, T48, T56, and T76 programmers. It talks to the programmer over USB through [minipro-core](https://github.com/MikeDX/minipro-rs) and does not shell out to the C `minipro` binary.
+Copyright (C) MikeDX 2026
+
+A desktop app for XGecu TL866A/CS, TL866II+, T48, T56, and T76 programmers. It talks to the programmer over USB through [minipro-rs](https://github.com/MikeDX/minipro-rs) and does not shell out to the C `minipro` binary.
 
 The first version can detect the programmer, search the chip database, read, write, verify, erase, blank-check, and read a chip ID. Reads and opened files show up in a hex view, with a live log of each operation.
 
-This program is GPL-3.0-or-later, the same license as `minipro` and `minipro-core`.
+This program is GPL-3.0-or-later, the same license as [minipro](https://gitlab.com/DavidGriffith/minipro) and [minipro-rs](https://gitlab.com/arcturus8081/minipro-rs).
+
+## Credits
+
+[minipro](https://gitlab.com/DavidGriffith/minipro) was created by Valentin Dudouyt in 2014. Many others have contributed code and bug reports. Development of that C project is coordinated by David Griffith.
+
+The programmer protocol in this program is [minipro-rs](https://gitlab.com/arcturus8081/minipro-rs), a Rust reimplementation by the minipro-rs contributors.
 
 ## Develop
 

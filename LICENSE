@@ -1,3 +1,20 @@
+miniproui
+Copyright (C) 2026 MikeDX https://github.com/MikeDX/miniui
+
+The programmer protocol comes from minipro, created by Valentin Dudouyt
+in 2014. Many others have contributed code and bug reports. Development
+of that C project is coordinated by David Griffith:
+https://gitlab.com/DavidGriffith/minipro
+
+This program uses minipro-rs, a Rust reimplementation of minipro by the
+minipro-rs contributors:
+https://gitlab.com/arcturus8081/minipro-rs
+
+miniproui is free software: you can redistribute it and/or modify it
+under the terms of the GNU General Public License as published by the
+Free Software Foundation, either version 3 of the License, or (at your
+option) any later version.
+
                     GNU GENERAL PUBLIC LICENSE
                        Version 3, 29 June 2007
 

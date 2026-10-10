@@ -1,3 +1,8 @@
+// Copyright (C) 2026 MikeDX https://github.com/MikeDX/miniui
+// Protocol based on minipro, created by Valentin Dudouyt in 2014.
+// Development of that C project is coordinated by David Griffith.
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 //! Programmer session, chip-database search, and chip operations.
 //!
 //! USB work is synchronous. Callers run these methods on a blocking thread.

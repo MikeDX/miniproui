@@ -25,6 +25,7 @@
   },
   "bundle": {
     "active": true,
+    "copyright": "Copyright (C) MikeDX 2026. minipro was created by Valentin Dudouyt in 2014; David Griffith coordinates that project. Protocol library: minipro-rs.",
     "targets": "all",
     "icon": [
       "icons/32x32.png",

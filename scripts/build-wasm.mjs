@@ -1,3 +1,8 @@
+// Copyright (C) 2026 MikeDX https://github.com/MikeDX/miniui
+// Protocol based on minipro, created by Valentin Dudouyt in 2014.
+// Development of that C project is coordinated by David Griffith.
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -46,13 +51,23 @@ if (!existsSync(wasm)) {
   process.exit(1);
 }
 
+const notice = `// Copyright (C) 2026 MikeDX https://github.com/MikeDX/miniui
+// Protocol based on minipro, created by Valentin Dudouyt in 2014.
+// Development of that C project is coordinated by David Griffith.
+// SPDX-License-Identifier: GPL-3.0-or-later
+`;
+
 const outDir = "src/lib/webusb/pkg";
 run("wasm-bindgen", ["--target", "web", "--out-dir", outDir, wasm]);
 for (const name of readdirSync(outDir)) {
-  if (!name.endsWith(".js")) continue;
   const file = path.join(outDir, name);
-  const source = readFileSync(file, "utf8");
-  if (!source.startsWith("// @ts-nocheck")) {
-    writeFileSync(file, `// @ts-nocheck\n${source}`);
+  if (name.endsWith(".js")) {
+    let source = readFileSync(file, "utf8");
+    if (!source.includes("Copyright (C) 2026 MikeDX https://github.com/MikeDX/miniui")) source = `${notice}\n${source}`;
+    if (!source.startsWith("// @ts-nocheck")) source = `// @ts-nocheck\n${source}`;
+    writeFileSync(file, source);
+  } else if (name.endsWith(".d.ts")) {
+    const source = readFileSync(file, "utf8");
+    if (!source.includes("Copyright (C) 2026 MikeDX https://github.com/MikeDX/miniui")) writeFileSync(file, `${notice}\n${source}`);
   }
 }

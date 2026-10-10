@@ -2,7 +2,7 @@
 name = "miniproui"
 version = "0.1.0"
 description = "Cross-platform UI for XGecu chip programmers"
-authors = ["miniproui contributors"]
+authors = ["MikeDX"]
 license = "GPL-3.0-or-later"
 edition = "2021"
 rust-version = "1.85"

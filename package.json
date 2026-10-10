@@ -4,6 +4,7 @@
   "description": "Cross-platform UI for XGecu chip programmers",
   "type": "module",
   "license": "GPL-3.0-or-later",
+  "author": "MikeDX",
   "scripts": {
     "dev": "vite dev",
     "dev:web": "MINIPRO_WEBUSB=1 npm run wasm && MINIPRO_WEBUSB=1 vite dev",
