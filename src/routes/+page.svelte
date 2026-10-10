@@ -82,6 +82,7 @@
   let confirm = $state<null | { title: string; body: string; label: string; run: () => Promise<void> }>(
     null,
   );
+  let romdbReady = $state(false);
 
   let activeModel = $derived(connectedModel ?? profile);
   let memoryBytes = $derived(
@@ -226,6 +227,14 @@
         total = totalBytes;
       });
       prepareBrowser().catch((err) => note(errorText(err)));
+      import("$lib/romdb")
+        .then((mod) => mod.romdbAvailable())
+        .then((ok) => {
+          romdbReady = ok;
+        })
+        .catch(() => {
+          romdbReady = false;
+        });
       return () => {
         offLog();
         offProgress();
@@ -371,7 +380,7 @@
 
   function doRomIdent() {
     run(async () => {
-      note("Running mame -romident...");
+      note(browser ? "Identifying ROM…" : "Running mame -romident...");
       noteLines((await romIdent()).lines);
     });
   }
@@ -665,7 +674,9 @@
       <div class="options">
         <span class="muted">ROM</span>
         <button class="btn" disabled={working || bufferLength === 0} onclick={doRomCheck}>Check</button>
-        <button class="btn" disabled={working || bufferLength === 0} onclick={doRomIdent}>Identify</button>
+        {#if !browser || romdbReady}
+          <button class="btn" disabled={working || bufferLength === 0} onclick={doRomIdent}>Identify</button>
+        {/if}
         <button class="btn" disabled={working || bufferLength === 0} onclick={doCompare}>Compare…</button>
       </div>
 

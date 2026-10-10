@@ -31,6 +31,24 @@ function serveDatabase(req, res, next) {
   fs.createReadStream(file).pipe(res);
 }
 
+function serveRomdb(req, res, next) {
+  const name = String(req.url || "")
+    .split("?")[0]
+    .replace(/^\//, "");
+  if (!/^([0-9a-f]{3}|meta)\.json$/.test(name)) {
+    next();
+    return;
+  }
+  const file = path.join("static-romdb", name);
+  if (!fs.existsSync(file)) {
+    next();
+    return;
+  }
+  res.setHeader("Content-Type", "application/json");
+  res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
+  fs.createReadStream(file).pipe(res);
+}
+
 function isolationHeaders(_req, res, next) {
   if (!webusb) {
     next();
@@ -48,10 +66,12 @@ function miniproDatabase() {
     configureServer(server) {
       server.middlewares.use(isolationHeaders);
       server.middlewares.use("/db", serveDatabase);
+      server.middlewares.use("/romdb", serveRomdb);
     },
     configurePreviewServer(server) {
       server.middlewares.use(isolationHeaders);
       server.middlewares.use("/db", serveDatabase);
+      server.middlewares.use("/romdb", serveRomdb);
     },
   };
 }
@@ -82,7 +102,7 @@ export default defineConfig(() => ({
         }
       : undefined,
     watch: {
-      ignored: ["**/src-tauri/**", "**/third_party/**", "**/web-core/target/**"],
+      ignored: ["**/src-tauri/**", "**/third_party/**", "**/web-core/target/**", "**/static-romdb/**", "**/static-romdb.tmp/**"],
     },
   },
   preview: {

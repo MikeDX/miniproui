@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { cpSync, copyFileSync, existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 
 const from = path.resolve("third_party/minipro-rs/data");
@@ -9,4 +9,9 @@ for (const name of ["infoic.xml", "logicic.xml", "algorithm.xml"]) {
   const source = path.join(from, name);
   if (!existsSync(source)) continue;
   copyFileSync(source, path.join(to, name));
+}
+
+const romdb = path.resolve("static-romdb");
+if (existsSync(path.join(romdb, "meta.json"))) {
+  cpSync(romdb, path.resolve("build/romdb"), { recursive: true });
 }

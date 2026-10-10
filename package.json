@@ -12,6 +12,7 @@
     "preview": "vite preview",
     "preview:web": "MINIPRO_WEBUSB=1 vite preview",
     "wasm": "node scripts/build-wasm.mjs",
+    "romdb": "node scripts/build-romdb.mjs",
     "prepare": "svelte-kit sync || echo ''",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "tauri": "tauri"

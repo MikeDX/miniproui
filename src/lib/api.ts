@@ -278,8 +278,16 @@ export function bufferReport(): Promise<DumpReport> {
   return command("buffer_report");
 }
 
-export function romIdent(): Promise<RomIdentReport> {
-  return command("rom_ident");
+export async function romIdent(): Promise<RomIdentReport> {
+  if (isTauri()) return command("rom_ident");
+  const { identifyDump } = await import("$lib/romdb");
+  try {
+    const bytes = await encodeBrowser("dump.bin");
+    return { lines: await identifyDump(bytes) };
+  } catch (err) {
+    const message = errorText(err);
+    return { lines: [message.includes("lookup failed") ? message : "ROM database lookup failed."] };
+  }
 }
 
 export function compareBuffer(path: string): Promise<DumpReport> {

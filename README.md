@@ -24,7 +24,7 @@ Search and file loading work with no programmer attached. Pick the TL866II+ data
 
 `npm run dev:web` serves the same UI in Chrome or Edge and talks to the programmer with WebUSB. The chip protocol still runs in Rust, compiled to WebAssembly. The page asks for the device when you press Rescan. Firefox and Safari do not implement WebUSB.
 
-Quit the desktop app first. Only one program can claim the programmer. Firmware update and MAME ROM identification stay in the desktop app, because a firmware update reboots the USB device and ROM identification shells out to `mame`.
+Quit the desktop app first. Only one program can claim the programmer. Firmware update stays in the desktop app, because a firmware update reboots the USB device. ROM identification in the web build looks up the dump's SHA-1 in static MAME shards under `/romdb/`, built locally with `npm run romdb -- --mame /path/to/mame`. The desktop app still shells out to `mame -romident`.
 
 The dev server sends the cross-origin isolation headers WebAssembly needs for the USB transfers. A static host has to send the same headers:
 
